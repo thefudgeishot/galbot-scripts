@@ -72,6 +72,11 @@ class IoaiNavEnv:
             # self.follow_path_callback()
         self.stepOffset = self.simulator.get_step_count()
 
+        printEnv("sim is ready, robot is at: " + str(self.computeRobotPositionRelative()))
+
+        while True:
+            self.simulator.step()
+
         # self.step(4)
         # self.step(1)
         # self.step(2)
@@ -125,7 +130,7 @@ class IoaiNavEnv:
         #     self.simulator.step()
         #     
         #     if (500 <= (self.simulator.get_step_count()-stepCount)):
-        #         # sim has stalled for some reason
+        #         # sim has stalfled for some reason
         #         self.simulator.reset()
 
         while(not self.check_movement_complete([self.startPoint[0], self.startPoint[1],0], 0.1)):
@@ -176,7 +181,8 @@ class IoaiNavEnv:
         if (len(self.fifoPath) == 0):
             self.fifoPath.append(self.computeRobotPositionRelative())
         
-        globalStepDistance = 0.2 #1.75 ## must be greater than tolerance(0.1)
+        globalStepDistance = 0.4  # Increased from 0.2 to allow faster movement
+        globalYawStep = 0.3  # Separate smaller step for yaw rotation (about 17 degrees)
 
         # switch case
         match number:
@@ -193,10 +199,10 @@ class IoaiNavEnv:
                 self.moveRight(globalStepDistance)
                 printEnv("right")
             case 4:
-                self.shiftYaw(globalStepDistance)
+                self.shiftYaw(globalYawStep)
                 printEnv("yaw shift positive")
             case 5:
-                self.shiftYaw(-globalStepDistance)
+                self.shiftYaw(-globalYawStep)
                 printEnv("yaw shift negative")
         self.moving = True
 
@@ -218,7 +224,7 @@ class IoaiNavEnv:
         printEnv("Sim time(steps): " + str(self.simulator.get_step_count()-self.stepOffset))
         
         # sim ran out of time
-        if (60 <= self.actionSteps):
+        if (80 <= self.actionSteps):  # Updated to match training config
             self.done = True
         # goal was reached
         if (self.goalReached()):
@@ -239,7 +245,7 @@ class IoaiNavEnv:
         # Create simulator config
         config = PhysicsSimulatorConfig(
             mujoco_config=MujocoConfig(headless=headless,
-                                       timestep=0.1) # run the simulation at 0.1s per step
+                                       timestep=0.01) # run the simulation at 0.01s per step
         )
         self.simulator = PhysicsSimulator(config)
         
@@ -247,7 +253,7 @@ class IoaiNavEnv:
         self.simulator.add_default_scene()
 
         # Add robot
-        robot_config = RobotConfig(
+        self.robot_config = RobotConfig(
             prim_path="/World/Galbot",
             name="galbot_one_foxtrot",
             mjcf_path=Path()
@@ -259,7 +265,7 @@ class IoaiNavEnv:
             position=[self.startPoint[0], self.startPoint[1], 0],
             orientation=[0, 0, 0, 1]
         )
-        self.simulator.add_robot(robot_config)
+        self.simulator.add_robot(self.robot_config)
 
         # Initialize the scene
         self._init_scene()
@@ -309,50 +315,87 @@ class IoaiNavEnv:
         for cube in cube_configs:
             self.simulator.add_object(cube)
 
-        # display start and end points
-        goals_config = [
-            CuboidConfig(
-                prim_path=Path(self.simulator.root_prim_path).joinpath("cube_1"),
-                position=[self.startPoint[0], self.startPoint[1], 0.1], # x,y,z
-                orientation=[0, 0, 0, 1],
-                scale=[1, 1, 0.001],
-                color=[0.0, 1.0, 0.0]  # Green cube
-            ),
-            CuboidConfig(
-                prim_path=Path(self.simulator.root_prim_path).joinpath("cube_1"),
-                position=[self.endPoint[0], self.endPoint[1], 0.1],
-                orientation=[0, 0, 0, 1],
-                scale=[1, 1, 0.001],
-                color=[1.0, 0.0, 0.0]  # Red cube
-            )
-        ]
-        #### Commented out so cubes don't spawn, at high sim speeds these cubes mess with robot physics
-        # for cube in goals_config:
-        #     self.simulator.add_object(cube)
+        # Add cubes in random positions and check if they overlap with each other.
+        cubes = []
+        for i in range(18):
+            position = []
+            while (True):
+                position = [random.uniform(-2, 3.6), random.uniform(-2, 3.6), 0.25]
+                if all(self.distBetween(item, position) >= 1 for item in cubes) and (self.distBetween(position, self.startPoint) >= 1.5) and (self.distBetween(position, self.endPoint) >= 1.5):
+                    break
+            cubes.append(position)
 
+        for i, point in enumerate(cubes):
+            self.simulator.add_object(
+                CuboidConfig(
+                    prim_path=f"/World/Obstacle_{i}",
+                    name=f"obstacle_{i}",
+                    position=[point[0], point[1], 0.4],
+                    scale=[0.4, 0.4, 0.4],
+                    color=[random.random(), random.random(), random.random()]
+                )
+            )
 
     def _setup_interface(self):
-        config = GalbotInterfaceConfig()
-        config.robot.prim_path = "/World/Galbot"
+        galbot_interface_config = GalbotInterfaceConfig()
 
-        robot_name = self.robot.name
-        config.modules_manager.enabled_modules.extend([
-            "right_arm", "left_arm", "leg", "head", "chassis"
-        ])
+        galbot_interface_config.robot.prim_path = "/World/Galbot"
 
-        # Joint configurations
-        config.right_arm.joint_names = [f"{robot_name}/right_arm_joint{i}" for i in range(1, 8)]
-        config.left_arm.joint_names = [f"{robot_name}/left_arm_joint{i}" for i in range(1, 8)]
-        config.leg.joint_names = [f"{robot_name}/leg_joint{i}" for i in range(1, 5)]
-        config.head.joint_names = [f"{robot_name}/head_joint{i}" for i in range(1, 3)]
-        config.chassis.joint_names = [
+        robot_name = self.robot_config.name
+
+        # Enable modules
+        galbot_interface_config.modules_manager.enabled_modules.append("right_arm")
+        galbot_interface_config.modules_manager.enabled_modules.append("left_arm")
+        galbot_interface_config.modules_manager.enabled_modules.append("leg")
+        galbot_interface_config.modules_manager.enabled_modules.append("head")
+        galbot_interface_config.modules_manager.enabled_modules.append("chassis")
+
+        # for each module you want to use, define each joint
+        galbot_interface_config.right_arm.joint_names = [
+            f"{robot_name}/right_arm_joint1",
+            f"{robot_name}/right_arm_joint2",
+            f"{robot_name}/right_arm_joint3",
+            f"{robot_name}/right_arm_joint4",
+            f"{robot_name}/right_arm_joint5",
+            f"{robot_name}/right_arm_joint6",
+            f"{robot_name}/right_arm_joint7",
+        ]
+
+        galbot_interface_config.left_arm.joint_names = [
+            f"{robot_name}/left_arm_joint1",
+            f"{robot_name}/left_arm_joint2",
+            f"{robot_name}/left_arm_joint3",
+            f"{robot_name}/left_arm_joint4",
+            f"{robot_name}/left_arm_joint5",
+            f"{robot_name}/left_arm_joint6",
+            f"{robot_name}/left_arm_joint7",
+        ]
+
+        galbot_interface_config.leg.joint_names = [
+            f"{robot_name}/leg_joint1",
+            f"{robot_name}/leg_joint2",
+            f"{robot_name}/leg_joint3",
+            f"{robot_name}/leg_joint4",
+        ]
+        
+        galbot_interface_config.head.joint_names = [
+            f"{robot_name}/head_joint1",
+            f"{robot_name}/head_joint2"
+        ]
+
+        galbot_interface_config.chassis.joint_names = [
             f"{robot_name}/mobile_forward_joint",
-            f"{robot_name}/mobile_side_joint", 
+            f"{robot_name}/mobile_side_joint",
             f"{robot_name}/mobile_yaw_joint",
         ]
 
-        self.interface = GalbotInterface(galbot_interface_config=config, simulator=self.simulator)
-        self.interface.initialize()
+        galbot_interface = GalbotInterface(
+            galbot_interface_config=galbot_interface_config,
+            simulator=self.simulator
+        )
+        galbot_interface.initialize()
+
+        self.interface = galbot_interface
 
     # generic joint position to target position check
     def _is_joint_positions_reached(self, module, target_positions):
@@ -360,37 +403,22 @@ class IoaiNavEnv:
         return np.allclose(current_positions, target_positions, atol=0.1)
     
     def _init_pose(self):
-        # Init head pose
+        # Initialize robot pose
+        poses = {
+            self.interface.head: [0.0, 0.0],
+            self.interface.leg: [0.43, 1.48, 1.07, 0.0],
+            self.interface.left_arm: [-0.4654513936071508, 1.4785659313201904, -0.6235712173907869, 2.097979784011841, 1.3999720811843872, -0.009971064515411854, 1.0999830961227417],
+            self.interface.right_arm: [0.4654513936071508, -1.4785659313201904, 0.6235712173907869, -2.097979784011841, -1.3999720811843872, 0.009971064515411854, -1.0999830961227417]
+        }
+
         self.head = [0.0, 0.0]
-        self._move_joints_to_target(self.interface.head, self.head)
-
-        # Init leg pose
         self.leg = [0.43, 1.48, 1.07, 0.0]
-        self._move_joints_to_target(self.interface.leg, self.leg)
-
-        # Init left arm pose
-        self.left_arm = [
-            0.058147381991147995,
-            1.4785659313201904,
-            -0.0999724417924881,
-            -2.097979784011841,
-            1.3999720811843872,
-            -0.009971064515411854,
-            1.0999830961227417,
-        ]
-        self._move_joints_to_target(self.interface.left_arm, self.left_arm)
-
-        # Init right arm pose
-        self.right_arm = [
-            -0.058147381991147995,
-            -1.4785659313201904,
-            0.0999724417924881,
-            2.097979784011841,
-            -1.3999720811843872,
-            0.009971064515411854,
-            -1.0999830961227417,
-        ]
-        self._move_joints_to_target(self.interface.right_arm, self.right_arm)
+        self.left_arm = [-0.4654513936071508, 1.4785659313201904, -0.6235712173907869, 2.097979784011841, 1.3999720811843872, -0.009971064515411854, 1.0999830961227417]
+        self.right_arm = [0.4654513936071508, -1.4785659313201904, 0.6235712173907869, -2.097979784011841, -1.3999720811843872, 0.009971064515411854, -1.0999830961227417]
+        
+        
+        for module, pose in poses.items():
+            module.set_joint_positions(pose, immediate=True)
 
         self.simulator.add_physics_callback("is_init_done", self._init_pose_done)
             
@@ -422,6 +450,7 @@ class IoaiNavEnv:
             self.initDone = True
             self.simulator.remove_physics_callback("is_init_done")
             
+        self.initDone = True
 
     def computeRobotPositionRelative(self):
         # the chassis coordinates are relative to where the robot starts
@@ -558,39 +587,47 @@ class IoaiNavEnv:
             # self.simulator.remove_physics_callback("follow_path_callback")
 
     def goalReached(self):
-        tolerance = 0.1
+        tolerance = 0.15  # Increased tolerance to match training success criteria
         robotLocation = self.computeRobotPositionRelative()
         if (self.distBetween([robotLocation[0],robotLocation[1]], self.endPoint) < tolerance):
             self.done = True
 
 
     def rewardCalculation(self):
-        ### https://www.desmos.com/calculator/0e36419059
+        ### Improved reward function with goal bonus and penalty prevention
 
         # distance between start and finish 
         dist = self.distBetween(self.startPoint,self.endPoint)
 
         robotLocation = self.computeRobotPositionRelative()
-
-        # print("robot location: " + str(robotLocation))
-        robotToStart = self.distBetween(self.startPoint,[robotLocation[0],robotLocation[1]])
         robotToFinish = self.distBetween(self.endPoint, [robotLocation[0],robotLocation[1]])
 
-        # print("start to end:" + str(dist))
+        # Base reward: normalized distance progress (0 to 1)
+        base_reward = max(0.0, 1 - (robotToFinish/dist))
+        
+        # Goal reached bonus
+        if robotToFinish < 0.15:
+            base_reward += 1.0  # Large bonus for reaching goal
+        
+        # Small penalty for time steps to encourage efficiency
+        time_penalty = self.actionSteps * 0.01
+        
+        # Ensure reward is never negative to avoid confusion
+        final_reward = max(0.0, base_reward - time_penalty)
 
-        # print("start to robot: " + str(robotToStart))
-        # print("robot to end: " + str(robotToFinish))
-
-        totalDistance = robotToStart+robotToFinish
-        # print("total distance: " + str(totalDistance))
-
-        return 1 - (robotToFinish/dist)
+        return final_reward
     
     def observation(self):
         robotLocation = self.computeRobotPositionRelative()
+        
+        # Calculate distance to goal
+        dist_to_goal = self.distBetween([robotLocation[0], robotLocation[1]], self.endPoint)
+        
+        # Calculate normalized steps (current steps / max steps)
+        normalized_steps = self.actionSteps / 80.0  # Updated to match new max steps
 
-        ########  robot x coord  |  robot y coord  | robot yaw value |    end goal x   | end goal y
-        return [ robotLocation[0], robotLocation[1], robotLocation[2], self.endPoint[0],self.endPoint[1]]
+        ########  robot x coord  |  robot y coord  | robot yaw value |    end goal x   | end goal y | dist_to_goal | normalized_steps
+        return [ robotLocation[0], robotLocation[1], robotLocation[2], self.endPoint[0], self.endPoint[1], dist_to_goal, normalized_steps]
     
     def info(self):
         ########  sim step position 
@@ -598,7 +635,7 @@ class IoaiNavEnv:
 
 
 if __name__ == "__main__":
-    env_train = IoaiNavEnv(headless=False, seed=11)
+    env_train = IoaiNavEnv(headless=False, seed=random.randint(10000000, 99999999))
     # env_train.simulator.play()
     env_train.simulator.play()
     # while(True):
