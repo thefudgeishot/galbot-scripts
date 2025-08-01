@@ -74,8 +74,8 @@ class IoaiNavEnv:
 
         printEnv("sim is ready, robot is at: " + str(self.computeRobotPositionRelative()))
 
-        while True:
-            self.simulator.step()
+        # while True:
+        #     self.simulator.step()
 
         # self.step(4)
         # self.step(1)
@@ -245,7 +245,7 @@ class IoaiNavEnv:
         # Create simulator config
         config = PhysicsSimulatorConfig(
             mujoco_config=MujocoConfig(headless=headless,
-                                       timestep=0.01) # run the simulation at 0.01s per step
+                                       timestep=0.05) # run the simulation at 0.01s per step
         )
         self.simulator = PhysicsSimulator(config)
         
@@ -400,7 +400,7 @@ class IoaiNavEnv:
     # generic joint position to target position check
     def _is_joint_positions_reached(self, module, target_positions):
         current_positions = module.get_joint_positions()
-        return np.allclose(current_positions, target_positions, atol=0.1)
+        return np.allclose(current_positions, target_positions, atol=0.3)
     
     def _init_pose(self):
         # Initialize robot pose
@@ -418,7 +418,7 @@ class IoaiNavEnv:
         
         
         for module, pose in poses.items():
-            module.set_joint_positions(pose, immediate=True)
+            module.set_joint_positions(pose, immediate=False)
 
         self.simulator.add_physics_callback("is_init_done", self._init_pose_done)
             
