@@ -400,7 +400,7 @@ class IoaiNavEnv:
     # generic joint position to target position check
     def _is_joint_positions_reached(self, module, target_positions):
         current_positions = module.get_joint_positions()
-        return np.allclose(current_positions, target_positions, atol=0.1)
+        return np.allclose(current_positions, target_positions, atol=0.3)
     
     def _init_pose(self):
         # Initialize robot pose
@@ -450,7 +450,6 @@ class IoaiNavEnv:
             self.initDone = True
             self.simulator.remove_physics_callback("is_init_done")
             
-        self.initDone = True
 
     def computeRobotPositionRelative(self):
         # the chassis coordinates are relative to where the robot starts
